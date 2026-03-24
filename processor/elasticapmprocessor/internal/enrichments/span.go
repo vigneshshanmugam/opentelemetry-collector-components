@@ -125,6 +125,14 @@ type spanEnrichmentContext struct {
 	// presetEventOutcome captures the event.outcome value from the Range scan.
 	// Empty string means event.outcome is absent. Replaces attrs.Get(EventOutcome) in setEventOutcome.
 	presetEventOutcome string
+
+	// presetProcessorEventTxn is true when the Range scan finds processor.event == "transaction".
+	// Allows skipping the attrs.PutStr write (and its internal Map.Get) in enrichTransaction.
+	presetProcessorEventTxn bool
+
+	// presetSampledTrue is true when the Range scan finds transaction.sampled == true.
+	// Allows skipping the attrs.PutBool write in enrichTransaction for the common case.
+	presetSampledTrue bool
 }
 
 func (s *spanEnrichmentContext) Enrich(
@@ -242,9 +250,13 @@ func (s *spanEnrichmentContext) Enrich(
 			// Signal that elastic attrs are already present (intake path).
 			// Detected for free inside the existing Range scan — no extra Get needed.
 			s.hasPresetElastic = true
+			s.presetProcessorEventTxn = v.Str() == "transaction"
 		case elasticattr.EventOutcome:
 			// Cache the value to avoid attrs.Get(EventOutcome) in setEventOutcome.
 			s.presetEventOutcome = v.Str()
+		case elasticattr.TransactionSampled:
+			// Cache whether transaction.sampled is already true (the only value we write).
+			s.presetSampledTrue = v.Bool()
 		}
 		return true
 	})
@@ -283,7 +295,7 @@ func (s *spanEnrichmentContext) enrichTransaction(
 	if cfg.TimestampUs.Enabled {
 		s.putInt(attrs, elasticattr.TimestampUs, attribute.ToTimestampUS(span.StartTimestamp()))
 	}
-	if cfg.Sampled.Enabled {
+	if cfg.Sampled.Enabled && !s.presetSampledTrue {
 		s.putBool(attrs, elasticattr.TransactionSampled, s.getSampled())
 	}
 	if cfg.ID.Enabled {
@@ -304,7 +316,7 @@ func (s *spanEnrichmentContext) enrichTransaction(
 			span.SetName("")
 		}
 	}
-	if cfg.ProcessorEvent.Enabled {
+	if cfg.ProcessorEvent.Enabled && !s.presetProcessorEventTxn {
 		s.putStr(attrs, elasticattr.ProcessorEvent, "transaction")
 	}
 	if cfg.RepresentativeCount.Enabled {
