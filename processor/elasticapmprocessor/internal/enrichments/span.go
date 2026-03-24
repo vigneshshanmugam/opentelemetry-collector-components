@@ -317,16 +317,16 @@ func (s *spanEnrichmentContext) enrichTransaction(
 	if cfg.EventOutcome.Enabled {
 		s.setEventOutcome(span)
 	}
-	if cfg.InferredSpans.Enabled {
+	if cfg.InferredSpans.Enabled && span.Links().Len() > 0 {
 		s.setInferredSpans(span)
 	}
-	if cfg.UserAgent.Enabled {
+	if cfg.UserAgent.Enabled && (s.inferredUserAgentName != "" || s.inferredUserAgentVersion != "") {
 		s.setUserAgentIfRequired(span)
 	}
-	if cfg.MessageQueueName.Enabled {
+	if cfg.MessageQueueName.Enabled && s.messagingDestinationName != "" {
 		s.setMessageQueue(span)
 	}
-	if cfg.RemoveMessaging.Enabled {
+	if cfg.RemoveMessaging.Enabled && s.isMessaging {
 		s.removeMessagingAttrs(span)
 	}
 }
@@ -495,7 +495,7 @@ func (s *spanEnrichmentContext) setTxnResult(span ptrace.Span) {
 		}
 	}
 
-	attribute.PutStr(span.Attributes(), elasticattr.TransactionResult, result)
+	s.putStr(span.Attributes(), elasticattr.TransactionResult, result)
 }
 
 // setEventOutcome derives event.outcome from span status and HTTP status,
@@ -539,7 +539,7 @@ func (s *spanEnrichmentContext) setEventOutcome(span ptrace.Span) {
 
 	// Direct insert: we already confirmed EventOutcome is absent — no second Get needed.
 	attrs.PutStr(elasticattr.EventOutcome, outcome)
-	attribute.PutInt(attrs, elasticattr.SuccessCount, int64(successCount))
+	s.putInt(attrs, elasticattr.SuccessCount, int64(successCount))
 }
 
 func (s *spanEnrichmentContext) setSpanAction(span ptrace.Span) {
