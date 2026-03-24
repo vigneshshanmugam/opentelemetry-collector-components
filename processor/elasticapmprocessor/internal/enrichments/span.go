@@ -102,9 +102,18 @@ type spanEnrichmentContext struct {
 	inferredUserAgentName    string
 	inferredUserAgentVersion string
 
+	// presetEventOutcome captures event.outcome from the Range scan (empty = absent).
+	// Placed with strings to avoid alignment padding after the bool block.
+	presetEventOutcome string
+
 	serverPort     int64
 	urlPort        int64
 	httpStatusCode int64
+
+	// presetDurationUs and presetTimestampUs cache int64 elastic attrs from the Range scan.
+	// The corresponding *Set bool indicates the attribute was found (distinguishing absent from value=0).
+	presetDurationUs  int64
+	presetTimestampUs int64
 
 	spanStatusCode ptrace.StatusCode
 
@@ -122,10 +131,6 @@ type spanEnrichmentContext struct {
 	// When false (OTLP path), attribute writes can skip the existence pre-check.
 	hasPresetElastic bool
 
-	// presetEventOutcome captures the event.outcome value from the Range scan.
-	// Empty string means event.outcome is absent. Replaces attrs.Get(EventOutcome) in setEventOutcome.
-	presetEventOutcome string
-
 	// presetProcessorEventTxn is true when the Range scan finds processor.event == "transaction".
 	// Allows skipping the attrs.PutStr write (and its internal Map.Get) in enrichTransaction.
 	presetProcessorEventTxn bool
@@ -133,6 +138,15 @@ type spanEnrichmentContext struct {
 	// presetSampledTrue is true when the Range scan finds transaction.sampled == true.
 	// Allows skipping the attrs.PutBool write in enrichTransaction for the common case.
 	presetSampledTrue bool
+
+	// presetTransactionRoot caches transaction.root from the Range scan.
+	// presetTransactionRootSet distinguishes absent (false) from present-with-value-false.
+	presetTransactionRoot    bool
+	presetTransactionRootSet bool
+
+	// presetDurationUsSet and presetTimestampUsSet flag that the attribute was found in Range.
+	presetDurationUsSet  bool
+	presetTimestampUsSet bool
 }
 
 func (s *spanEnrichmentContext) Enrich(
@@ -257,6 +271,15 @@ func (s *spanEnrichmentContext) Enrich(
 		case elasticattr.TransactionSampled:
 			// Cache whether transaction.sampled is already true (the only value we write).
 			s.presetSampledTrue = v.Bool()
+		case elasticattr.TransactionRoot:
+			s.presetTransactionRoot = v.Bool()
+			s.presetTransactionRootSet = true
+		case elasticattr.TransactionDurationUs:
+			s.presetDurationUs = v.Int()
+			s.presetDurationUsSet = true
+		case elasticattr.TimestampUs:
+			s.presetTimestampUs = v.Int()
+			s.presetTimestampUsSet = true
 		}
 		return true
 	})
@@ -293,7 +316,9 @@ func (s *spanEnrichmentContext) enrichTransaction(
 ) {
 	attrs := span.Attributes()
 	if cfg.TimestampUs.Enabled {
-		s.putInt(attrs, elasticattr.TimestampUs, attribute.ToTimestampUS(span.StartTimestamp()))
+		if ts := attribute.ToTimestampUS(span.StartTimestamp()); !s.presetTimestampUsSet || s.presetTimestampUs != ts {
+			s.putInt(attrs, elasticattr.TimestampUs, ts)
+		}
 	}
 	if cfg.Sampled.Enabled && !s.presetSampledTrue {
 		s.putBool(attrs, elasticattr.TransactionSampled, s.getSampled())
@@ -305,7 +330,9 @@ func (s *spanEnrichmentContext) enrichTransaction(
 		}
 	}
 	if cfg.Root.Enabled {
-		s.putBool(attrs, elasticattr.TransactionRoot, isTraceRoot(span))
+		if isRoot := isTraceRoot(span); !s.presetTransactionRootSet || s.presetTransactionRoot != isRoot {
+			s.putBool(attrs, elasticattr.TransactionRoot, isRoot)
+		}
 	}
 	if cfg.Name.Enabled {
 		// do not set transaction name to an empty str to match prior apm data behavior
@@ -324,7 +351,9 @@ func (s *spanEnrichmentContext) enrichTransaction(
 		s.putDouble(attrs, elasticattr.TransactionRepresentativeCount, repCount)
 	}
 	if cfg.DurationUs.Enabled {
-		s.putInt(attrs, elasticattr.TransactionDurationUs, getDurationUs(span))
+		if dur := getDurationUs(span); !s.presetDurationUsSet || s.presetDurationUs != dur {
+			s.putInt(attrs, elasticattr.TransactionDurationUs, dur)
+		}
 	}
 	if cfg.Type.Enabled && s.transactionType == "" {
 		// s.transactionType extracted during Range scan; if empty, key is absent — safe to write.
