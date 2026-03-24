@@ -413,10 +413,13 @@ func (s *spanEnrichmentContext) getSampled() bool {
 }
 
 // putStr writes key→val with insert-if-absent semantics.
-// When hasPresetElastic is false (OTLP path), skips the existence pre-check for ~50% speed boost.
+// When hasPresetElastic is false (OTLP path), skips the existence pre-check.
+// Inlines attribute.PutStr logic to stay within Go's inliner budget (~80 units).
 func (s *spanEnrichmentContext) putStr(attrs pcommon.Map, key, val string) {
 	if s.hasPresetElastic {
-		attribute.PutStr(attrs, key, val)
+		if _, ok := attrs.Get(key); !ok {
+			attrs.PutStr(key, val)
+		}
 	} else {
 		attrs.PutStr(key, val)
 	}
@@ -425,7 +428,9 @@ func (s *spanEnrichmentContext) putStr(attrs pcommon.Map, key, val string) {
 // putInt is putStr for int64 values.
 func (s *spanEnrichmentContext) putInt(attrs pcommon.Map, key string, val int64) {
 	if s.hasPresetElastic {
-		attribute.PutInt(attrs, key, val)
+		if _, ok := attrs.Get(key); !ok {
+			attrs.PutInt(key, val)
+		}
 	} else {
 		attrs.PutInt(key, val)
 	}
@@ -434,7 +439,9 @@ func (s *spanEnrichmentContext) putInt(attrs pcommon.Map, key string, val int64)
 // putBool is putStr for bool values.
 func (s *spanEnrichmentContext) putBool(attrs pcommon.Map, key string, val bool) {
 	if s.hasPresetElastic {
-		attribute.PutBool(attrs, key, val)
+		if _, ok := attrs.Get(key); !ok {
+			attrs.PutBool(key, val)
+		}
 	} else {
 		attrs.PutBool(key, val)
 	}
@@ -443,7 +450,9 @@ func (s *spanEnrichmentContext) putBool(attrs pcommon.Map, key string, val bool)
 // putDouble is putStr for float64 values.
 func (s *spanEnrichmentContext) putDouble(attrs pcommon.Map, key string, val float64) {
 	if s.hasPresetElastic {
-		attribute.PutDouble(attrs, key, val)
+		if _, ok := attrs.Get(key); !ok {
+			attrs.PutDouble(key, val)
+		}
 	} else {
 		attrs.PutDouble(key, val)
 	}
