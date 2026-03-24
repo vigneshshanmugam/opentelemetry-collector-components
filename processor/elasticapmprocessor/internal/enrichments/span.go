@@ -155,6 +155,11 @@ type spanEnrichmentContext struct {
 	// presetSuccessCountSet is true when event.success_count was found in Range.
 	// Allows skipping the attribute.PutInt + getRepresentativeCount in setEventOutcome.
 	presetSuccessCountSet bool
+
+	// Presence flags for remaining elastic attrs — fit in struct end-padding (no size change).
+	presetTransactionIDSet     bool // skip putStr(TransactionID) when already set and !ClearSpanID
+	presetTransactionNameSet   bool // skip putStr(TransactionName) when already set
+	presetTransactionResultSet bool // skip setTxnResult when result already written
 }
 
 func (s *spanEnrichmentContext) Enrich(
@@ -292,6 +297,12 @@ func (s *spanEnrichmentContext) Enrich(
 			s.presetRepCountSet = true
 		case elasticattr.SuccessCount:
 			s.presetSuccessCountSet = true
+		case elasticattr.TransactionID:
+			s.presetTransactionIDSet = true
+		case elasticattr.TransactionName:
+			s.presetTransactionNameSet = true
+		case elasticattr.TransactionResult:
+			s.presetTransactionResultSet = true
 		}
 		return true
 	})
@@ -335,7 +346,7 @@ func (s *spanEnrichmentContext) enrichTransaction(
 	if cfg.Sampled.Enabled && !s.presetSampledTrue {
 		s.putBool(attrs, elasticattr.TransactionSampled, s.getSampled())
 	}
-	if cfg.ID.Enabled {
+	if cfg.ID.Enabled && (!s.presetTransactionIDSet || cfg.ClearSpanID.Enabled) {
 		s.putStr(attrs, elasticattr.TransactionID, span.SpanID().String())
 		if cfg.ClearSpanID.Enabled {
 			span.SetSpanID(pcommon.SpanID{})
@@ -346,7 +357,7 @@ func (s *spanEnrichmentContext) enrichTransaction(
 			s.putBool(attrs, elasticattr.TransactionRoot, isRoot)
 		}
 	}
-	if cfg.Name.Enabled {
+	if cfg.Name.Enabled && !s.presetTransactionNameSet {
 		// do not set transaction name to an empty str to match prior apm data behavior
 		if name := span.Name(); name != "" {
 			s.putStr(attrs, elasticattr.TransactionName, name)
@@ -375,7 +386,7 @@ func (s *spanEnrichmentContext) enrichTransaction(
 		// s.transactionType extracted during Range scan; if empty, key is absent — safe to write.
 		attrs.PutStr(elasticattr.TransactionType, s.getTxnType())
 	}
-	if cfg.Result.Enabled {
+	if cfg.Result.Enabled && !s.presetTransactionResultSet {
 		s.setTxnResult(span)
 	}
 	if cfg.EventOutcome.Enabled {
