@@ -832,26 +832,26 @@ func isTraceRoot(span ptrace.Span) bool {
 }
 
 func isElasticTransaction(span ptrace.Span) bool {
+	// Check cheap O(1) conditions before the O(N) attribute scan for processor.event.
+	if isTraceRoot(span) {
+		return true
+	}
+
 	flags := tracepb.SpanFlags(span.Flags())
-
-	// Events may have already been defined as an elastic transaction.
-	// check the processor.event value to avoid incorrectly classifying
-	// a span.
-	processorEvent, _ := span.Attributes().Get(elasticattr.ProcessorEvent)
-
-	switch {
-	case processorEvent.Str() == "transaction":
-		return true
-	case isTraceRoot(span):
-		return true
-	case (flags & tracepb.SpanFlags_SPAN_FLAGS_CONTEXT_HAS_IS_REMOTE_MASK) == 0:
+	if (flags & tracepb.SpanFlags_SPAN_FLAGS_CONTEXT_HAS_IS_REMOTE_MASK) == 0 {
 		// span parent is unknown, fall back to span kind
 		return span.Kind() == ptrace.SpanKindServer || span.Kind() == ptrace.SpanKindConsumer
-	case (flags & tracepb.SpanFlags_SPAN_FLAGS_CONTEXT_IS_REMOTE_MASK) != 0:
+	}
+	if (flags & tracepb.SpanFlags_SPAN_FLAGS_CONTEXT_IS_REMOTE_MASK) != 0 {
 		// span parent is remote
 		return true
 	}
-	return false
+
+	// Last-resort check: processor.event may have been explicitly set to "transaction"
+	// (e.g. by the intake receiver). This is O(N) — only reached when none of the
+	// cheaper structural checks matched.
+	processorEvent, _ := span.Attributes().Get(elasticattr.ProcessorEvent)
+	return processorEvent.Str() == "transaction"
 }
 
 func getHostPort(
