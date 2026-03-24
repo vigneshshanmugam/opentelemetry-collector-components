@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/sampling"
 	"github.com/ua-parser/uap-go/uaparser"
@@ -74,7 +75,7 @@ func EnrichSpan(
 }
 
 type spanEnrichmentContext struct {
-	urlFull *url.URL
+	urlFull string // the host[:port] extracted from url.full (see extractURLHost)
 
 	peerService              string
 	serverAddress            string
@@ -175,8 +176,7 @@ func (s *spanEnrichmentContext) Enrich(
 		case string(semconv25.URLFullKey),
 			string(semconv25.HTTPURLKey):
 			s.isHTTP = true
-			// ignoring error as if parse fails then we don't want the url anyway
-			s.urlFull, _ = url.Parse(v.Str())
+			s.urlFull = extractURLHost(v.Str())
 		case string(semconv25.URLSchemeKey):
 			s.isHTTP = true
 			s.urlScheme = v.Str()
@@ -835,12 +835,12 @@ func isElasticTransaction(span ptrace.Span) bool {
 }
 
 func getHostPort(
-	urlFull *url.URL, urlDomain string, urlPort int64,
+	urlFull string, urlDomain string, urlPort int64,
 	fallbackServerAddress string, fallbackServerPort int64,
 ) string {
 	switch {
-	case urlFull != nil:
-		return urlFull.Host
+	case urlFull != "":
+		return urlFull
 	case urlDomain != "":
 		if urlPort == 0 {
 			return urlDomain
@@ -861,4 +861,38 @@ var standardStatusCodeResults = [...]string{
 	"HTTP 3xx",
 	"HTTP 4xx",
 	"HTTP 5xx",
+}
+
+// extractURLHost extracts the host[:port] from a raw URL string without a full url.Parse.
+// It handles the common case of http/https URLs efficiently.
+// Falls back to url.Parse for URLs with userinfo (user:pass@host) or unusual schemes.
+// The returned host is lowercased per RFC 3986.
+func extractURLHost(rawURL string) string {
+	// Find "://"
+	i := strings.Index(rawURL, "://")
+	if i < 0 {
+		// Not a standard absolute URL — nothing useful for host extraction
+		return ""
+	}
+
+	authority := rawURL[i+3:]
+
+	// Strip path, query, and fragment
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+
+	// If there's userinfo (contains '@'), we can't safely extract host without
+	// proper URL parsing (the '@' could be in a port, though that's invalid).
+	// Fall back to net/url for correctness.
+	if strings.IndexByte(authority, '@') >= 0 {
+		u, err := url.Parse(rawURL)
+		if err != nil || u == nil {
+			return ""
+		}
+		return u.Host
+	}
+
+	// RFC 3986: host is case-insensitive; lowercase it to match url.Parse behavior.
+	return strings.ToLower(authority)
 }

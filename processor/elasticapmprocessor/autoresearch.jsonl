@@ -1,0 +1,2 @@
+{"type":"config","name":"elasticapmprocessor-traces","metricName":"ns_per_span","metricUnit":"ns","bestDirection":"lower"}
+{"run":1,"commit":"baseline","metric":475.0,"metrics":{"allocs_per_op":15175,"mode":"ECS"},"status":"keep","description":"baseline - ECS/r10_s5_sp100, URL parsing via url.Parse dominant at ~22% CPU","timestamp":1774317202,"segment":0}
