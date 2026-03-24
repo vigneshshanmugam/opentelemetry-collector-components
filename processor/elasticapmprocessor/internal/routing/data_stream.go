@@ -51,6 +51,11 @@ func EncodeDataStream(resource pcommon.Resource, dataStreamType string, serviceN
 func encodeDataStreamDefault(resource pcommon.Resource, dataStreamType string) {
 	attributes := resource.Attributes()
 
+	// Short-circuit: if DataStreamType is already correctly set, all three attrs were written
+	// together in a prior call with the same constant values — skip redundant writes.
+	if ds, ok := attributes.Get(elasticattr.DataStreamType); ok && ds.Str() == dataStreamType {
+		return
+	}
 	attributes.PutStr(elasticattr.DataStreamType, dataStreamType)
 	attributes.PutStr(elasticattr.DataStreamDataset, "apm")
 	attributes.PutStr(elasticattr.DataStreamNamespace, NamespaceDefault)
