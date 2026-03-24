@@ -888,31 +888,55 @@ var standardStatusCodeResults = [...]string{
 // Falls back to url.Parse for URLs with userinfo (user:pass@host) or unusual schemes.
 // The returned host is lowercased per RFC 3986.
 func extractURLHost(rawURL string) string {
-	// Find "://"
-	i := strings.Index(rawURL, "://")
-	if i < 0 {
-		// Not a standard absolute URL — nothing useful for host extraction
-		return ""
-	}
+	n := len(rawURL)
 
-	authority := rawURL[i+3:]
-
-	// Strip path, query, and fragment
-	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
-		authority = authority[:end]
-	}
-
-	// If there's userinfo (contains '@'), we can't safely extract host without
-	// proper URL parsing (the '@' could be in a port, though that's invalid).
-	// Fall back to net/url for correctness.
-	if strings.IndexByte(authority, '@') >= 0 {
-		u, err := url.Parse(rawURL)
-		if err != nil || u == nil {
+	// Fast path for the most common cases: detect "://" at known positions
+	// for 4-char schemes (http, grpc, amqp) and 5-char schemes (https, redis).
+	// This avoids the full strings.Index scan for these common schemes.
+	var authorityStart int
+	switch {
+	case n > 7 && rawURL[4] == ':' && rawURL[5] == '/' && rawURL[6] == '/':
+		authorityStart = 7 // 4-char scheme: http://, grpc://, etc.
+	case n > 8 && rawURL[5] == ':' && rawURL[6] == '/' && rawURL[7] == '/':
+		authorityStart = 8 // 5-char scheme: https://, redis://, etc.
+	default:
+		i := strings.Index(rawURL, "://")
+		if i < 0 {
 			return ""
 		}
-		return u.Host
+		authorityStart = i + 3
 	}
 
-	// RFC 3986: host is case-insensitive; lowercase it to match url.Parse behavior.
-	return strings.ToLower(authority)
+	s := rawURL[authorityStart:]
+
+	// Single pass: scan for authority boundary (/?#) and userinfo (@),
+	// while tracking uppercase chars to avoid a separate strings.ToLower scan.
+	hasUpper := false
+	for j := 0; j < len(s); j++ {
+		c := s[j]
+		switch {
+		case c == '/' || c == '?' || c == '#':
+			// Authority ends here.
+			host := s[:j]
+			if hasUpper {
+				return strings.ToLower(host)
+			}
+			return host
+		case c == '@':
+			// Userinfo present — fall back to url.Parse for correctness.
+			u, err := url.Parse(rawURL)
+			if err != nil || u == nil {
+				return ""
+			}
+			return u.Host
+		case c >= 'A' && c <= 'Z':
+			hasUpper = true
+		}
+	}
+
+	// No path separator — whole remainder is the authority (e.g. "http://hostname").
+	if hasUpper {
+		return strings.ToLower(s)
+	}
+	return s
 }
