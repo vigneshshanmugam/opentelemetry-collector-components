@@ -1,2 +1,4 @@
 {"type":"config","name":"elasticapmprocessor-traces","metricName":"ns_per_span","metricUnit":"ns","bestDirection":"lower"}
 {"run":1,"commit":"baseline","metric":475.0,"metrics":{"allocs_per_op":15175,"mode":"ECS"},"status":"keep","description":"baseline - ECS/r10_s5_sp100, URL parsing via url.Parse dominant at ~22% CPU","timestamp":1774317202,"segment":0}
+{"run":2,"commit":"a7fa1e1","metric":364.0,"metrics":{"allocs_per_op":10150,"mode":"ECS"},"status":"keep","description":"extractURLHost: fast string-based host extraction vs url.Parse - 23% latency gain, 33% alloc reduction","timestamp":1774317528,"segment":0}
+{"run":3,"commit":"17a2c31","metric":320.1,"metrics":{"allocs_per_op":148,"mode":"ECS"},"status":"keep","description":"lazy childIDs slice: skip pcommon.NewSlice when no span links (40% of allocs eliminated)","timestamp":1774317900,"segment":0}

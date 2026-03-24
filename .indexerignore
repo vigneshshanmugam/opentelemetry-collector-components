@@ -1,0 +1,21 @@
+
+checkout
+.buildkite
+_build
+.github
+.vscode
+cmd
+testing
+tools
+distributions
+loadgen
+pkg
+
+# Test files 
+**/*_test_.go
+
+# Misc
+versions.yaml
+renovate.json
+catalog-info.yaml
+LICENSE

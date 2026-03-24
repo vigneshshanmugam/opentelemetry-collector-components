@@ -447,14 +447,24 @@ func (s *spanEnrichmentContext) setTxnResult(span ptrace.Span) {
 // This matches the logic in the apm Elasticsearch ingest pipeline:
 // https://github.com/elastic/elasticsearch/blob/171a3b9/x-pack/plugin/apm-data/src/main/resources/ingest-pipelines/traces-apm@pipeline.yaml#L33-L40
 func (s *spanEnrichmentContext) setEventOutcome(span ptrace.Span) {
-	// Exit early when event.outcome is already explicitly set to unknown (e.g. by
-	// the intake receiver). This prevents success_count from being written when
-	// the outcome is unknown.
-	if v, ok := span.Attributes().Get(elasticattr.EventOutcome); ok && v.Str() == outcomeUnknown {
+	// Check for an existing event.outcome value once and reuse the result to
+	// avoid a redundant Map.Get inside attribute.PutStr on the hot path.
+	attrs := span.Attributes()
+	existing, exists := attrs.Get(elasticattr.EventOutcome)
+	if exists {
+		// Exit early when event.outcome is already explicitly set to unknown (e.g. by
+		// the intake receiver). This prevents success_count from being written when
+		// the outcome is unknown.
+		if existing.Str() == outcomeUnknown {
+			return
+		}
+		// outcome already set to a non-unknown value — don't overwrite it,
+		// but still set success_count if absent.
+		attribute.PutInt(attrs, elasticattr.SuccessCount, int64(getRepresentativeCount(span.TraceState().AsRaw())))
 		return
 	}
 
-	// default to success outcome
+	// event.outcome is absent — compute and write directly (skip redundant pre-check).
 	outcome := outcomeSuccess
 	successCount := getRepresentativeCount(span.TraceState().AsRaw())
 	switch {
@@ -470,8 +480,9 @@ func (s *spanEnrichmentContext) setEventOutcome(span ptrace.Span) {
 		successCount = 0
 	}
 
-	attribute.PutStr(span.Attributes(), elasticattr.EventOutcome, outcome)
-	attribute.PutInt(span.Attributes(), elasticattr.SuccessCount, int64(successCount))
+	// Direct insert: we already confirmed EventOutcome is absent — no second Get needed.
+	attrs.PutStr(elasticattr.EventOutcome, outcome)
+	attribute.PutInt(attrs, elasticattr.SuccessCount, int64(successCount))
 }
 
 func (s *spanEnrichmentContext) setSpanAction(span ptrace.Span) {
