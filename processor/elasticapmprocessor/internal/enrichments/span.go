@@ -147,6 +147,14 @@ type spanEnrichmentContext struct {
 	// presetDurationUsSet and presetTimestampUsSet flag that the attribute was found in Range.
 	presetDurationUsSet  bool
 	presetTimestampUsSet bool
+
+	// presetRepCountSet is true when transaction.representative_count was found in Range.
+	// Allows skipping the write when the value would be defaultRepresentativeCount (1.0).
+	presetRepCountSet bool
+
+	// presetSuccessCountSet is true when event.success_count was found in Range.
+	// Allows skipping the attribute.PutInt + getRepresentativeCount in setEventOutcome.
+	presetSuccessCountSet bool
 }
 
 func (s *spanEnrichmentContext) Enrich(
@@ -280,6 +288,10 @@ func (s *spanEnrichmentContext) Enrich(
 		case elasticattr.TimestampUs:
 			s.presetTimestampUs = v.Int()
 			s.presetTimestampUsSet = true
+		case elasticattr.TransactionRepresentativeCount:
+			s.presetRepCountSet = true
+		case elasticattr.SuccessCount:
+			s.presetSuccessCountSet = true
 		}
 		return true
 	})
@@ -348,7 +360,11 @@ func (s *spanEnrichmentContext) enrichTransaction(
 	}
 	if cfg.RepresentativeCount.Enabled {
 		repCount := getRepresentativeCount(span.TraceState().AsRaw())
-		s.putDouble(attrs, elasticattr.TransactionRepresentativeCount, repCount)
+		// Skip write if already set AND value is the default (1.0 = always-sampled).
+		// For non-default sampling ratios, always write the updated value.
+		if !s.presetRepCountSet || repCount != defaultRepresentativeCount {
+			s.putDouble(attrs, elasticattr.TransactionRepresentativeCount, repCount)
+		}
 	}
 	if cfg.DurationUs.Enabled {
 		if dur := getDurationUs(span); !s.presetDurationUsSet || s.presetDurationUs != dur {
@@ -560,8 +576,10 @@ func (s *spanEnrichmentContext) setEventOutcome(span ptrace.Span) {
 		if s.presetEventOutcome == outcomeUnknown {
 			return
 		}
-		// Non-unknown value — still set success_count if absent.
-		attribute.PutInt(attrs, elasticattr.SuccessCount, int64(getRepresentativeCount(span.TraceState().AsRaw())))
+		// Non-unknown value — set success_count if absent (skip if already present).
+		if !s.presetSuccessCountSet {
+			attribute.PutInt(attrs, elasticattr.SuccessCount, int64(getRepresentativeCount(span.TraceState().AsRaw())))
+		}
 		return
 	}
 
