@@ -24,6 +24,7 @@ import (
 
 	"go.opentelemetry.io/collector/client"
 	"go.opentelemetry.io/collector/consumer/consumertest"
+	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.uber.org/zap"
@@ -64,6 +65,36 @@ func makeHTTPTracesForBench(numResources, numScopes, numSpans int) ptrace.Traces
 		}
 	}
 	return td
+}
+
+// BenchmarkProcessorConsumeTraces_WithPooling benchmarks the ECS path with pdata.useProtoPooling
+// enabled — same finding as in elasticapmconnector: pooling eliminates per-attribute allocations.
+func BenchmarkProcessorConsumeTraces_WithPooling(b *testing.B) {
+	require := func(err error) {
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	const poolingGateID = "pdata.useProtoPooling"
+	require(featuregate.GlobalRegistry().Set(poolingGateID, true))
+	b.Cleanup(func() { _ = featuregate.GlobalRegistry().Set(poolingGateID, false) })
+
+	cfg := NewDefaultConfig().(*Config)
+	cfg.HostIPEnabled = false
+	next := &consumertest.TracesSink{}
+	p := NewTraceProcessor(cfg, next, zap.NewNop())
+	td := makeHTTPTracesForBench(10, 5, 100)
+	ecsCtx := client.NewContext(context.Background(), client.Info{
+		Metadata: client.NewMetadata(map[string][]string{"x-elastic-mapping-mode": {"ecs"}}),
+	})
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if err := p.ConsumeTraces(ecsCtx, td); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*5000), "ns/span")
 }
 
 // BenchmarkProcessorConsumeTraces_OTel benchmarks ConsumeTraces in non-ECS (OTLP) mode.
