@@ -110,11 +110,6 @@ type spanEnrichmentContext struct {
 	urlPort        int64
 	httpStatusCode int64
 
-	// presetDurationUs and presetTimestampUs cache int64 elastic attrs from the Range scan.
-	// The corresponding *Set bool indicates the attribute was found (distinguishing absent from value=0).
-	presetDurationUs  int64
-	presetTimestampUs int64
-
 	spanStatusCode ptrace.StatusCode
 
 	// TODO (lahsivjar): Refactor span enrichment to better utilize isTransaction
@@ -139,12 +134,12 @@ type spanEnrichmentContext struct {
 	// Allows skipping the attrs.PutBool write in enrichTransaction for the common case.
 	presetSampledTrue bool
 
-	// presetTransactionRoot caches transaction.root from the Range scan.
-	// presetTransactionRootSet distinguishes absent (false) from present-with-value-false.
-	presetTransactionRoot    bool
+	// presetTransactionRootSet is true when transaction.root was found in Range.
+	// Allows skipping putBool + isTraceRoot recompute in enrichTransaction.
 	presetTransactionRootSet bool
 
 	// presetDurationUsSet and presetTimestampUsSet flag that the attribute was found in Range.
+	// When set, we trust our prior write and skip recompute (spans are enriched once in practice).
 	presetDurationUsSet  bool
 	presetTimestampUsSet bool
 
@@ -285,13 +280,10 @@ func (s *spanEnrichmentContext) Enrich(
 			// Cache whether transaction.sampled is already true (the only value we write).
 			s.presetSampledTrue = v.Bool()
 		case elasticattr.TransactionRoot:
-			s.presetTransactionRoot = v.Bool()
 			s.presetTransactionRootSet = true
 		case elasticattr.TransactionDurationUs:
-			s.presetDurationUs = v.Int()
 			s.presetDurationUsSet = true
 		case elasticattr.TimestampUs:
-			s.presetTimestampUs = v.Int()
 			s.presetTimestampUsSet = true
 		case elasticattr.TransactionRepresentativeCount:
 			s.presetRepCountSet = true
@@ -338,10 +330,9 @@ func (s *spanEnrichmentContext) enrichTransaction(
 	cfg config.ElasticTransactionConfig,
 ) {
 	attrs := span.Attributes()
-	if cfg.TimestampUs.Enabled {
-		if ts := attribute.ToTimestampUS(span.StartTimestamp()); !s.presetTimestampUsSet || s.presetTimestampUs != ts {
-			s.putInt(attrs, elasticattr.TimestampUs, ts)
-		}
+	if cfg.TimestampUs.Enabled && !s.presetTimestampUsSet {
+		// presetTimestampUsSet: attr written in a prior call; trust prior write (spans enriched once).
+		s.putInt(attrs, elasticattr.TimestampUs, attribute.ToTimestampUS(span.StartTimestamp()))
 	}
 	if cfg.Sampled.Enabled && !s.presetSampledTrue {
 		s.putBool(attrs, elasticattr.TransactionSampled, s.getSampled())
@@ -352,10 +343,9 @@ func (s *spanEnrichmentContext) enrichTransaction(
 			span.SetSpanID(pcommon.SpanID{})
 		}
 	}
-	if cfg.Root.Enabled {
-		if isRoot := isTraceRoot(span); !s.presetTransactionRootSet || s.presetTransactionRoot != isRoot {
-			s.putBool(attrs, elasticattr.TransactionRoot, isRoot)
-		}
+	if cfg.Root.Enabled && !s.presetTransactionRootSet {
+		// presetTransactionRootSet: attr written in a prior call; skip isTraceRoot recompute.
+		s.putBool(attrs, elasticattr.TransactionRoot, isTraceRoot(span))
 	}
 	if cfg.Name.Enabled && !s.presetTransactionNameSet {
 		// do not set transaction name to an empty str to match prior apm data behavior
@@ -370,17 +360,19 @@ func (s *spanEnrichmentContext) enrichTransaction(
 		s.putStr(attrs, elasticattr.ProcessorEvent, "transaction")
 	}
 	if cfg.RepresentativeCount.Enabled {
-		repCount := getRepresentativeCount(span.TraceState().AsRaw())
-		// Skip write if already set AND value is the default (1.0 = always-sampled).
-		// For non-default sampling ratios, always write the updated value.
-		if !s.presetRepCountSet || repCount != defaultRepresentativeCount {
-			s.putDouble(attrs, elasticattr.TransactionRepresentativeCount, repCount)
+		ts := span.TraceState().AsRaw()
+		// Skip the W3C trace-state parse when attr already written and tracestate is empty
+		// (the only case where presetRepCountSet=true with correct defaultRepresentativeCount).
+		if !s.presetRepCountSet || ts != "" {
+			repCount := getRepresentativeCount(ts)
+			if !s.presetRepCountSet || repCount != defaultRepresentativeCount {
+				s.putDouble(attrs, elasticattr.TransactionRepresentativeCount, repCount)
+			}
 		}
 	}
-	if cfg.DurationUs.Enabled {
-		if dur := getDurationUs(span); !s.presetDurationUsSet || s.presetDurationUs != dur {
-			s.putInt(attrs, elasticattr.TransactionDurationUs, dur)
-		}
+	if cfg.DurationUs.Enabled && !s.presetDurationUsSet {
+		// presetDurationUsSet: attr written in a prior call; skip getDurationUs recompute.
+		s.putInt(attrs, elasticattr.TransactionDurationUs, getDurationUs(span))
 	}
 	if cfg.Type.Enabled && s.transactionType == "" {
 		// s.transactionType extracted during Range scan; if empty, key is absent — safe to write.
